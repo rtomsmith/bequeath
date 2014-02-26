@@ -17,8 +17,8 @@ Jeweler::Tasks.new do |gem|
   gem.name = "bequeath"
   gem.homepage = "http://github.com/rtomsmith/bequeath"
   gem.license = "MIT"
-  gem.summary = %Q{TODO: one-line summary of your gem}
-  gem.description = %Q{TODO: longer description of your gem}
+  gem.summary = %Q{ActiveRecord Class Table Inheritance (CTI) gem}
+  gem.description = %Q{This gem implements a generalized Class Table Inheritance mechanism (sometimes aka Mulitple Table Inheritance) for ActiveRecord.}
   gem.email = "tsmith@landfall.com"
   gem.authors = ["Tom Smith"]
   # dependencies defined in Gemfile

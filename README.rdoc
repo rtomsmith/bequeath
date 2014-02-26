@@ -1,19 +1,183 @@
-= bequeath
+= Bequeath
 
-Description goes here.
+== Class Table Inheritance
+
+Class Table Inheritance (CTI) (aka Multiple Table Inheritance - MTI) is a pattern where
+your schema tracks closely to your domain class hierarchy. There is one table for the
+base class and one table for each distinct subclass. Columns that are relevant to all
+subclasses of the base class go in the base class table. Columns that are relevant only
+to subclasses (often only one subclass) go in the appropriate subclass tables. This
+database design technique is different than Single Table Inheritance, which stores
+all attributes for every member of an inheritance tree in a single table, and
+different than Concrete Table Inheritance which duplicates the inherited attributes
+in each table.
+
+== Usage
+
+The +acts_as_base_class+ and +acts_as_subclass+ ActiveRecord extensions lets models
+assume these roles under the CTI approach.
+
+A base class table has a standard auto-incrementing primary key (id) and contains
+attributes that are common to its sublass models. In addition, it has a column named
++<base-class-model>_type+ which contains the class name of the subclass.
+
+The primary key of the base class table and the primary key of the subclass tables are
+shared. Shared primary keys enforce the one-to-one nature of the base-class-to-subclass
+relationship.
+
+The +acts_as_base_class+ macro declares that a model will behave as a base class table.
+For example:
+
+  class Account < ActiveRecord::Base
+    acts_as_base_class :subclasses => [:patient_accounts, :physician_accounts, :vendor_accounts]
+  end
+
+In the example above, four tables are required in the schema. The 'accounts'
+table provides the attributes common to all types of accounts.The three subclass
+tables contain attributes specific to those account types. The +id+ column
+of a row in a subclass table contains the same value as the +id+ column in
+the corresponding row in the accounts table, so the subclass table +id+ column
+serves as both a primary key and a foreign key. A column named 'account_type'
+is used in the base class table to contain the model class name of the subclass
+whose row is associated with the base class row.
+
+The subclass models use +acts_as_subclass+ to specify the other side of the
+relationship. For example:
+
+  class PatientAccount < ActiveRecord::Base
+    acts_as_subclass :base_class => :accounts
+  end
+
+The above will link the base class and subclass models through a one-to-one
+relationship, and enables the subclass to inherit the base class attributes,
+associations, and exposed public methods. This means that users of a
+subclass model have direct access to the attributes and associations in
+defined in the base class model. So, rather than referring to
+"physician_account.account.name", you can say "physician_account.name".
+This works for associations as well.
+
+Other +acts_as_base_class+ options:
+
+[+:abstract+] By default, you can create a base class record without
+              a corresponding subclass, i.e. the type field will be nil.
+              This is usefult when your domain model allows a base
+              class to "stand on its own'. However, when you set the
+              +:abstract+ option to true, a base class record cannot
+              be created without an accompanying subclass.
+
+[+:exposes+]  A list of base class model method names - lets subclasses
+              "inherit" the specified base class methods.  These methods
+              then become directly accessible on the subclass model by
+              users of the subclass.
+
+Other +acts_as_subclass+ options:
+
+[+:inherit_whitelist+]  When set to +true+, the subclass model will invoke
+                        attr_accessible for the whitelist (attr_accessible)
+                        attributes of the base class model. Default is false.
+
+=== Creating Records
+
+When you want to create a record, you will typcially do so on the subclass
+model, like so:
+
+  v = VendorAccount.new(:vendor_attr1 => 'some vendor info')
+  v.account_attr1 = 'some account info'
+  v.save
+    -OR-
+  v = VendorAccount.new(:vendor_attr1 => 'some vendor info', :account_attr1 => 'some account info')
+  v.save
+
+Note that you can assign and refer to both subclass and base class attributes.
+When invoking 'v.save', validations are run and rows created in both the base
+class and subclass tables.
+
+You can also create records using the base class, although semantically this runs
+a bit counter to the base class/subclass relationship.
+
+  a = Account.new(:account_attr1 => 'some account_info')
+  a.vendor_account = VendorAccount.new(:vendor__attr1 => 'vendor data')
+  a.save       # sets a.account_type, runs validations, creates both records
+
+=== Finding Records
+
+The following illustrates some ways to retrieve base class/subclass records:
+
+  v = VendorAccount.find(6)   # <VendorAccount id: 6, created_at: 2013- ...>
+  v.vendor_attr1              # 'some vendor info'
+  v.baseclass_loaded?         # false - haven't referenced base class yet
+  v.account_attr1             # 'some account info'
+  v.baseclass_loaded?         # true - accounts row has been referenced
+  v.account -or- v.baseclass  # <Account id: 6, account_type: 'VendorAccount' ...>
+
+  a = Account.find(6)         # <Account id: 6, account_type: 'VendorAccount' ...>
+  a.subclass_loaded?          # false - haven't referenced associated vendor account yet
+  a.account_type              # 'VendorAccount'
+  a.subclass                  # (same as a.vendor_account): <VendorAccount id: 6, created_at: 2013- ...>
+  a.subclass_loaded?          # true
+
+In addition, you can use pre-defined scopes as an aid to retrieving records via
+the base class:
+
+  Account.by_vendor_account                           # records in accounts table of type VendorAccount
+  Account.by_vendor_account.includes(:vendor_account) # accounts rows of type VendorAccount with eager loading of subclass
+  Account.by_subclass(VendorAccount)                  # accounts table rows of type VendorAccount
+  Account.include_subclass.all                        # accounts rows of all types, eager_load associated subclasses
+
+Here are a couple of pre-defined scopes for reading records from the subclass model:
+
+  VendorAccount.where('vendor_date1 > ?', 1.month.ago).include_baseclass          # eager loads account objects
+  VendorAccount.where_thru_baseclass('accounts.account_date1 > ?', 1.month.ago)   # query via a base class column
+
+=== Updating Records
+
+To update via the subclass model, see the following example:
+
+  v = VendorAccount.find(6)   # <VendorAccount id: 6, created_at: 2008-.....>
+  v.vendor_column = 'modified'
+    -and/or-
+  v.account_column = 'updated'
+  v.save!                     # updates vendor_accounts and accounts tables if dirty
+
+You can also update using the the base class model:
+
+  a = Account.find(6)           # <Account id: 6, account_type: 'VendorAccount' ...>
+  a.account_column = 'updated'
+  a.subclass.vendor_column = 'modified'
+  a.vendor_account.vendor_column = 'modified'
+  a.save!                       # updates both tables if models dirty
+
+=== Deleting
+
+Deletes should always be carried out by using destroy() on either the base
+class or subclass model. The destroy deletes the corresponding rows in both
+tables.
+
+== Caveats
+
+* The current implementation has only been tested with ActiveRecord 3.2
+
+== Roadmap
+
+Here are the things I'll be working on next:
+
+* Clean up usage documentation
+* Integrate tests
+* Need to add more options to customize/override table names, column names, etc.
+* Flushing out requirements and adding tests for deeper hierarchies and mixing CTI and STI.
 
 == Contributing to bequeath
- 
-* Check out the latest master to make sure the feature hasn't been implemented or the bug hasn't been fixed yet.
-* Check out the issue tracker to make sure someone already hasn't requested it and/or contributed it.
-* Fork the project.
-* Start a feature/bugfix branch.
-* Commit and push until you are happy with your contribution.
+
+* Check out the latest master to make sure the feature hasn't been implemented or the bug hasn't been fixed yet
+* Check out the issue tracker to make sure someone already hasn't requested it and/or contributed it
+* Fork the project
+* Start a feature/bugfix branch
+* Commit and push until you are happy with your contribution
 * Make sure to add tests for it. This is important so I don't break it in a future version unintentionally.
 * Please try not to mess with the Rakefile, version, or history. If you want to have your own version, or is otherwise necessary, that is fine, but please isolate to its own commit so I can cherry-pick around it.
 
 == Copyright
 
-Copyright (c) 2014 Tom Smith. See LICENSE.txt for
-further details.
+Copyright (c) 2011-2014 Tom Smith. See LICENSE.txt for further details.
+
 
